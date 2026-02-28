@@ -1,80 +1,143 @@
-# SQL Injection Scanner 🚨
+# SQL Injection Scanner
 
-## 🚀 Overview
+A Python-based web security testing script that crawls a target site and checks forms + API-like endpoints for possible SQL injection behavior.
 
-The **SQL Injection Scanner** is a powerful tool designed to detect SQL injection vulnerabilities on websites by scanning and testing their forms. With its simple and easy-to-use interface, this tool automatically checks for potential weaknesses in web applications that could be exploited by attackers.
+## What this script does
 
-### 🔍 Key Features:
-- **Form Detection**: Identifies all forms on a target website.
-- **SQL Injection Testing**: Tests forms for common SQL injection vulnerabilities.
-- **Detailed Output**: Provides a detailed report on which forms are vulnerable and which are not.
-- **HTTP Methods Supported**: Supports both `GET` and `POST` request methods for form submissions.
-  
-This project is designed for penetration testers, cybersecurity enthusiasts, and developers to quickly identify security holes in their web applications.
+The scanner starts from one URL and performs a breadth-first crawl (up to depth 3). During crawling, it:
 
----
+- collects links from HTML pages (same domain only)
+- extracts likely auth/API endpoints from inline and external JavaScript
+- detects and parses HTML forms
+- tests discovered forms and API endpoints with multiple SQLi techniques
 
-### 🔧 How It Works
-Form Detection: The tool scans the given URL and automatically detects all available forms.
+The script is intended for **authorized security testing** and learning purposes.
 
-Input Field Analysis: It examines input fields (like text, password, hidden) in the forms.
+## How it works (step by step)
 
-SQL Injection Testing: For each form, the script submits test data with SQL injection characters (', "), and checks if the server responds with error messages typical of SQL injection vulnerabilities.
+### 1) Session setup
 
-Results: It outputs whether any of the forms are vulnerable to SQL injection.
+The script creates a shared `requests.Session()` and sets a browser-like User-Agent.
 
----
+Why this matters:
+- keeps connection behavior consistent
+- can improve compatibility with sites that filter non-browser traffic
 
-### 💡 Vulnerability Detection
+### 2) Crawl + endpoint discovery
 
-The SQL Injection Scanner looks for specific error messages that indicate the presence of SQL injection vulnerabilities, including:
+Starting from your input URL, `test_sql_injection()`:
 
-SQL syntax errors: "You have an error in your SQL syntax"
+- keeps a `visited` set to avoid rescanning the same URL
+- uses a queue (`collections.deque`) for BFS crawling
+- limits recursion with `max_depth = 3`
+- filters out non-useful links (`mailto:`, anchors, binary files, off-domain links)
 
-MySQL-related errors: "Warning: mysql_fetch_array()"
+It also tries to find hidden API routes by scanning JavaScript:
 
-Unterminated quotes: "Unclosed quotation mark after the character string"
+- `extract_js_endpoints()` finds paths related to login/auth flows
+- `extract_api_endpoints()` uses regex patterns like `/api/...`, `/auth/...`, `/rest/...`
 
-If any of these are found, the scanner flags the form as vulnerable.
+### 3) Form extraction
 
----
+For HTML responses only, `get_forms()` parses the page with BeautifulSoup and returns all forms.
 
-## Disclaimer
+For each form, `get_form_details()` collects:
+- form action
+- HTTP method (`GET` or `POST`)
+- all input/textarea fields (`name`, `type`, default value)
 
-This project is intended for **educational purposes only**.
+### 4) SQL injection checks
 
-By using this tool, you agree to the following:
+The scanner uses three detection styles:
 
-- You are solely responsible for how you use this script.
-- You will not use it to scan or probe any network, device, or system without **explicit permission**.
-- The author is **not liable** for any misuse, damage, legal consequences, or ethical violations resulting from the use of this software.
+#### A. Error-based SQLi
 
-Port scanning can be flagged as malicious activity. **Unauthorized use is illegal** in many countries and can result in **criminal charges**.
+For each form field, it injects quote payloads (`'` and `"`) and submits requests.
 
-Use it responsibly. Use it legally.
+Then `detect_sql_error()` searches response text for common DB error signatures, for example:
+- `sql syntax`
+- `warning: mysql`
+- `sqlite error`
+- `unclosed quotation mark`
 
----
+If matched, the form is flagged as potentially vulnerable.
 
-### 📚 Requirements
-This script requires the following Python libraries:
+#### B. Boolean-based SQLi (JSON/API)
 
-requests: To send HTTP requests to the target website.
+For API-like endpoints, `test_boolean_sqli()` posts:
+- normal credentials
+- a true condition payload (`' OR 1=1--`)
+- a false condition payload (`' OR 1=2--`)
 
-beautifulsoup4: To parse and extract HTML content from the website.
+It compares:
+- response size/content differences
+- JSON key structure changes
+- keyword differences (`welcome`, `success`, `invalid`, `error`)
 
-urllib3: For handling URL-related tasks.
+Meaningful true/false response differences may indicate SQLi behavior.
 
----
+#### C. Time-based SQLi
 
-## 🛠️ Installation
+The script tests delay payloads such as:
+- MySQL/MariaDB style: `SLEEP(5)`
+- PostgreSQL style: `pg_sleep(5)`
 
-To run the SQL Injection Scanner, you need to have Python installed along with a few libraries. Follow these steps to set it up:
+It measures baseline response time, then compares with payload response time.
 
-### 1. Clone the Repository
+If `avg(payload) - avg(baseline) >= 4.0s`, it reports possible time-based SQLi.
+
+This is used for:
+- forms (`test_time_sqli_form()`)
+- JSON APIs (`test_time_sqli_json()`)
+
+## Technologies used
+
+### Python Standard Library
+
+- `collections.deque` — BFS crawl queue
+- `urllib.parse` — URL normalization and joining
+- `re` — endpoint and content pattern matching
+- `json` — JSON structure comparison
+- `time`, `statistics` — timing-based detection
+
+### Third-party libraries
+
+- `requests` — HTTP client (GET/POST + sessions)
+- `beautifulsoup4` (`bs4`) — HTML parsing and form extraction
+
+## Project files
+
+- `Sql-injection-scanner.py` — main scanner script
+- `README.md` — project documentation
+- `requirements.txt` — Python dependency list
+
+## Installation
+
+1. Create and activate a virtual environment (recommended).
+2. Install dependencies:
 
 ```bash
-git clone https://github.com/BLA573/sql-injection-scanner.git
-cd sql-injection-scanner
-
 pip install -r requirements.txt
+```
 
+## Usage
+
+Run the scanner:
+
+```bash
+python Sql-injection-scanner.py
+```
+
+Then enter the target URL when prompted.
+
+## Notes and limitations
+
+- This is a heuristic scanner, so false positives/false negatives are possible.
+- Some endpoints may block automated traffic (WAF/rate limits/CAPTCHA).
+- Timing results depend on network stability and server load.
+- Crawling is intentionally conservative (`max_depth = 3`).
+
+## Legal and ethical use
+
+Use this tool **only** on systems you own or have explicit permission to test.
+Unauthorized scanning may violate laws and policies.
